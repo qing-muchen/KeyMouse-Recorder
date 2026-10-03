@@ -1,0 +1,21 @@
+# Build and test output
+**/bin/
+**/obj/
+**/TestResults/
+.artifacts/
+
+# Project-local SDK, CLI home and package cache
+.tools/
+.nuget/
+
+# Local application data (never commit recorded input or logs)
+**/data/
+**/macros/
+**/logs/
+**/config/settings.json
+*.tmp
+*.user
+*.suo
+.vs/
+.idea/
+TestResult.xml

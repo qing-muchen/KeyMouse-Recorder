@@ -1,0 +1,31 @@
+<Window x:Class="MacroRecorder.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Macro Recorder — Phase 0" Width="760" Height="430"
+        MinWidth="620" MinHeight="380" WindowStartupLocation="CenterScreen"
+        Background="#F5F7FA" FontFamily="Segoe UI, Microsoft YaHei UI">
+  <Grid Margin="32">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+    <StackPanel>
+      <TextBlock Text="Macro Recorder" FontSize="28" FontWeight="SemiBold" Foreground="#192B3D" />
+      <TextBlock Text="Windows 本地键鼠宏工具 · Phase 0 项目基础" Margin="0,8,0,0" Foreground="#526579" />
+    </StackPanel>
+    <Border Grid.Row="1" Margin="0,24,0,0" Padding="16" Background="White" CornerRadius="6">
+      <StackPanel>
+        <TextBlock Text="{Binding Status}" FontSize="18" FontWeight="SemiBold" AutomationProperties.AutomationId="ApplicationStatus" />
+        <TextBlock Text="{Binding PhaseDescription}" Margin="0,8,0,0" TextWrapping="Wrap" />
+      </StackPanel>
+    </Border>
+    <StackPanel Grid.Row="2" Margin="0,24,0,0">
+      <TextBlock Text="本地数据目录" FontWeight="SemiBold" />
+      <TextBlock Text="{Binding DataDirectory}" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="#526579" />
+      <TextBlock Text="macros / config / logs" Margin="0,8,0,0" Foreground="#526579" />
+    </StackPanel>
+    <TextBlock Grid.Row="3" Text="仅本地运行。当前版本没有输入监听或输入注入能力。" TextWrapping="Wrap" Foreground="#526579" />
+  </Grid>
+</Window>

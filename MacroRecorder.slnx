@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MacroRecorder.App/MacroRecorder.App.csproj" />
+    <Project Path="src/MacroRecorder.Core/MacroRecorder.Core.csproj" />
+    <Project Path="src/MacroRecorder.Infrastructure/MacroRecorder.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MacroRecorder.Core.Tests/MacroRecorder.Core.Tests.csproj" />
+  </Folder>
+</Solution>
