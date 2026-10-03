@@ -2,7 +2,7 @@
 
 Windows 10 / Windows 11 x64 本地键盘鼠标宏工具，使用 C#、.NET 10 和 WPF。
 
-**当前已完成 Phase 0 — Project Foundation 和 Phase 1 — Input Event Domain Model。没有 Hook、录制、回放或输入注入。**
+**当前已完成 Phase 0–2，包括领域模型、单调时钟和 RecordingSession。尚无 Hook、统一 Recorder、回放或输入注入。**
 每个 Phase 独立实现、测试、检查和提交，报告后等待用户确认；不得自动进入下一阶段。
 
 ## 开发环境
@@ -39,6 +39,7 @@ scripts/
 docs/
   phase-0-report.md             阶段验收记录
   phase-1-report.md             领域模型与 JSON 设计、测试及审查记录
+  phase-2-report.md             单调时钟、录制会话及并发边界记录
 ```
 
 依赖方向：`App → Core + Infrastructure`，`Infrastructure → Core`。
@@ -49,7 +50,7 @@ PowerShell 脚本转发带冒号的参数时需要保留示例中的引号。
 
 `Macro` 是可重复使用的定义，包含版本、标识、名称、说明、创建/更新时间、录制摘要、环境信息、
 播放默认偏好和 `ImmutableArray<InputEvent>`。必填字段采用 `required init`，事件属性只读；修改 record 副本不会改变原对象。
-RecordingSession、PlaybackSession 和 MacroFile 以后分别实现，禁止把运行时状态或文件 IO 塞入 Macro。
+RecordingSession 是独立运行时对象；PlaybackSession 和 MacroFile 以后分别实现，禁止把运行时状态或文件 IO 塞入 Macro。
 
 ## Phase 1 领域模型与内存 JSON
 
@@ -112,4 +113,18 @@ GUI 验收：启动窗口、确认 `Idle · 未录制`、核对本地目录和�
 样例 JSON 从真实 round-trip 测试的输出查看；测试仅使用内存字符串，没有生成 Macro JSON 文件。
 详细报告见 `docs/phase-1-report.md`。
 
-下一阶段仅建议 **Phase 2 — High Resolution Clock + RecordingSession**；收到明确确认后再执行。
+## Phase 2 单调时钟与录制会话
+
+- Core 的 `IMonotonicClock` 只暴露任意基准下的单调微秒值，不依赖 wall clock。
+- Infrastructure 的 `StopwatchMonotonicClock` 使用 BCL Stopwatch 计数器，并在边界内转换为整数微秒。
+- `RecordingSession` 构造即开始录制，通过类型化 Add API 统一生成 TimestampUs；调用方不传录制时间。
+- Timeline 允许相同时间戳；时钟回退时钳制到上一事件时间，保证 non-decreasing。
+- Stop 使用实际停止时刻计算 Duration，包含最后事件后的空闲时间，并返回不可变 `RecordingResult`。
+- Cancel 丢弃内部事件；Stopped / Cancelled 后的 Add、Stop、Cancel 均抛出 InvalidOperationException。
+- 一个短 lock 保护状态、时钟读取、顺序和 List append；Stop/Add 的边界也在同一临界区内。
+
+全量测试 114 项通过（Phase 2 新增 22 项），0 failed / 0 skipped；Release Build 为 0 warnings / 0 errors。
+Phase 1 JSON schema 未修改。当前仍没有 Keyboard/Mouse Hook、MouseMove Sampling、JSON 文件 IO、Validator 或 Playback。
+详细报告见 `docs/phase-2-report.md`。
+
+下一阶段仅建议 **Phase 3 — Keyboard Recorder**；收到明确确认后再执行。
