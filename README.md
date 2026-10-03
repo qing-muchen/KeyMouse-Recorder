@@ -2,7 +2,7 @@
 
 Windows 10 / Windows 11 x64 本地键盘鼠标宏工具，使用 C#、.NET 10 和 WPF。
 
-**当前已完成 Phase 0–2，包括领域模型、单调时钟和 RecordingSession。尚无 Hook、统一 Recorder、回放或输入注入。**
+**当前已完成 Phase 0–3，包括领域模型、单调时钟、RecordingSession 和显式启动的全局键盘录制边界。尚无鼠标录制、统一 Recorder、持久化、回放或输入注入。**
 每个 Phase 独立实现、测试、检查和提交，报告后等待用户确认；不得自动进入下一阶段。
 
 ## 开发环境
@@ -30,7 +30,7 @@ MacroRecorder.slnx
 src/
   MacroRecorder.App/             WPF 启动组合、基础窗口、只读 ViewModel
   MacroRecorder.Core/            与 UI/Win32/IO 无关的领域模型和日志边界
-  MacroRecorder.Infrastructure/  本地目录及结构化文件日志
+  MacroRecorder.Infrastructure/  本地目录、结构化文件日志、Windows 键盘 Hook
 tests/
   MacroRecorder.Core.Tests/      领域模型、JSON 往返、基础设施及资源释放测试
 scripts/
@@ -40,6 +40,7 @@ docs/
   phase-0-report.md             阶段验收记录
   phase-1-report.md             领域模型与 JSON 设计、测试及审查记录
   phase-2-report.md             单调时钟、录制会话及并发边界记录
+  phase-3-report.md             全局键盘 Hook、录制集成及资源生命周期记录
 ```
 
 依赖方向：`App → Core + Infrastructure`，`Infrastructure → Core`。
@@ -127,4 +128,20 @@ GUI 验收：启动窗口、确认 `Idle · 未录制`、核对本地目录和�
 Phase 1 JSON schema 未修改。当前仍没有 Keyboard/Mouse Hook、MouseMove Sampling、JSON 文件 IO、Validator 或 Playback。
 详细报告见 `docs/phase-2-report.md`。
 
-下一阶段仅建议 **Phase 3 — Keyboard Recorder**；收到明确确认后再执行。
+## Phase 3 键盘录制
+
+- Windows Infrastructure 使用 `WH_KEYBOARD_LL`，集中封装 Set / Unhook / CallNext、消息循环和原生结构。
+- Hook 在专用后台线程安装并运行消息循环；Start 等待安装结果，Stop 投递退出消息并有界等待线程结束。
+- `KeyboardHookService` 输出轻量 `KeyboardCaptureEvent`；平台无关的 `KeyboardRecorder` 映射后交给现有 RecordingSession。
+- `WM_KEYDOWN` / `WM_SYSKEYDOWN` 映射 KeyboardKeyDown，`WM_KEYUP` / `WM_SYSKEYUP` 映射 KeyboardKeyUp。
+- VirtualKey、ScanCode 和原始 Flags 保留；Win32 message time 不进入 Domain，TimestampUs 仍仅由 RecordingSession 生成。
+- `LLKHF_INJECTED` 和 `LLKHF_LOWER_IL_INJECTED` 默认不录制；Extended 和 AltDown 不会被误过滤。
+- Recorder 支持 Stop 后绑定新的 RecordingSession 重启；Dispose 释放 Hook，Dispose 后禁止 Start。
+- Callback 始终继续 Hook 链，托管异常被限制在 native boundary 内并通过 LastCallbackException 观察。
+
+全量测试 146 项通过（Phase 3 新增 32 项），0 failed / 0 skipped；Release Build 为 0 warnings / 0 errors。
+真实键盘人工验证覆盖 A、Shift+A、Ctrl+C、Alt+A、长按 B、停止边界和新 Session 隔离，全部通过；验证临时文件已清理。
+当前没有正式 WPF 录制入口，只有 Core / Infrastructure 能力；不会在应用启动或 Idle 时自动安装 Hook。
+详细报告见 `docs/phase-3-report.md`。
+
+下一阶段仅建议 **Phase 4 — Mouse Recorder**；收到明确确认后再执行。
