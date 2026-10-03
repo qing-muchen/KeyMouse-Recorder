@@ -2,7 +2,7 @@
 
 Windows 10 / Windows 11 x64 本地键盘鼠标宏工具，使用 C#、.NET 10 和 WPF。
 
-**当前已完成 Phase 0–3，包括领域模型、单调时钟、RecordingSession 和显式启动的全局键盘录制边界。尚无鼠标录制、统一 Recorder、持久化、回放或输入注入。**
+**当前已完成 Phase 0–4，包括领域模型、RecordingSession、显式启动的全局键盘/鼠标录制边界和基础鼠标移动采样。尚无统一 Recorder、持久化、回放或输入注入。**
 每个 Phase 独立实现、测试、检查和提交，报告后等待用户确认；不得自动进入下一阶段。
 
 ## 开发环境
@@ -30,7 +30,7 @@ MacroRecorder.slnx
 src/
   MacroRecorder.App/             WPF 启动组合、基础窗口、只读 ViewModel
   MacroRecorder.Core/            与 UI/Win32/IO 无关的领域模型和日志边界
-  MacroRecorder.Infrastructure/  本地目录、结构化文件日志、Windows 键盘 Hook
+  MacroRecorder.Infrastructure/  本地目录、结构化文件日志、Windows 键盘/鼠标 Hook
 tests/
   MacroRecorder.Core.Tests/      领域模型、JSON 往返、基础设施及资源释放测试
 scripts/
@@ -41,6 +41,7 @@ docs/
   phase-1-report.md             领域模型与 JSON 设计、测试及审查记录
   phase-2-report.md             单调时钟、录制会话及并发边界记录
   phase-3-report.md             全局键盘 Hook、录制集成及资源生命周期记录
+  phase-4-report.md             全局鼠标 Hook、移动采样及资源生命周期记录
 ```
 
 依赖方向：`App → Core + Infrastructure`，`Infrastructure → Core`。
@@ -144,4 +145,20 @@ Phase 1 JSON schema 未修改。当前仍没有 Keyboard/Mouse Hook、MouseMove 
 当前没有正式 WPF 录制入口，只有 Core / Infrastructure 能力；不会在应用启动或 Idle 时自动安装 Hook。
 详细报告见 `docs/phase-3-report.md`。
 
-下一阶段仅建议 **Phase 4 — Mouse Recorder**；收到明确确认后再执行。
+## Phase 4 鼠标录制
+
+- Windows Infrastructure 使用 `WH_MOUSE_LL` 捕获 Move、Left/Right/Middle/XButton Down/Up、垂直和水平滚轮。
+- 键盘与鼠标 Hook 各有独立线程，但共用经过 Phase 3 测试的内部生命周期和集中 P/Invoke 边界。
+- X/Y 使用 `int` 并保留负坐标；XButton 从 mouseData 高位 WORD 解析，WheelDelta 按 signed short 解析。
+- `LLMHF_INJECTED` 和 `LLMHF_LOWER_IL_INJECTED` 默认不录制；Win32 time 不进入 Domain。
+- `MouseMoveSampler` 默认以 8,000 us 间隔比较 last accepted move；第一次接受，0 表示全部接受，时钟回退会接受并重置基线。
+- Move 之外的按钮与滚轮完全绕过采样；拖拽保留 ButtonDown、采样后的 Move 和 ButtonUp。
+- 每次 Start 重置 sampler 并绑定新的 RecordingSession；Stop 不结束 Session，Dispose 释放 Hook。
+
+全量测试 206 项通过（Phase 4 新增 60 项），0 failed / 0 skipped；Release Build 为 0 warnings / 0 errors。
+真实鼠标验收在 30 秒内收到 23,581 个 raw Move，采样后记录 2,858 个；点击、垂直滚轮、两个侧键、拖拽、Stop 和 Session 重启通过。
+当前硬件未观察到水平滚轮事件；正负水平 delta 映射由单元测试覆盖。临时验证器和坐标轨迹均未保留。
+当前没有 Unified Recorder 或正式 WPF 录制入口，应用启动和 Idle 不会自动安装 Hook。
+详细报告见 `docs/phase-4-report.md`。
+
+下一阶段仅建议 **Phase 5 — Unified Recorder**；收到明确确认后再执行。

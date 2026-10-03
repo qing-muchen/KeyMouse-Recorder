@@ -1,32 +1,32 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
-using MacroRecorder.Core.Recording.Keyboard;
+using MacroRecorder.Core.Recording.Mouse;
 
-namespace MacroRecorder.Infrastructure.Windows.Keyboard;
+namespace MacroRecorder.Infrastructure.Windows.Mouse;
 
 /// <summary>
-/// Restartable WH_KEYBOARD_LL source hosted on a dedicated message-loop thread.
+/// Restartable WH_MOUSE_LL source hosted on a dedicated message-loop thread.
 /// It observes input only after Start and always forwards messages to the next hook.
 /// </summary>
 [SupportedOSPlatform("windows")]
-public sealed class KeyboardHookService : IKeyboardEventSource
+public sealed class MouseHookService : IMouseEventSource
 {
     private readonly WindowsHookNativeMethods.LowLevelHookProcedure hookProcedure;
     private readonly LowLevelHookThread hookThread;
     private Exception? lastCallbackException;
 
-    public KeyboardHookService()
+    public MouseHookService()
     {
         hookProcedure = HookCallback;
         hookThread = new LowLevelHookThread(
-            WindowsHookNativeMethods.WhKeyboardLowLevel,
-            "low-level keyboard",
-            "MacroRecorder.KeyboardHook",
+            WindowsHookNativeMethods.WhMouseLowLevel,
+            "low-level mouse",
+            "MacroRecorder.MouseHook",
             hookProcedure);
     }
 
-    public event Action<KeyboardCaptureEvent>? EventReceived;
+    public event Action<MouseCaptureEvent>? EventReceived;
 
     public bool IsRunning => hookThread.IsRunning;
 
@@ -49,15 +49,13 @@ public sealed class KeyboardHookService : IKeyboardEventSource
     {
         try
         {
-            if (KeyboardHookMessageMapper.TryMap(code, messageParameter, out var transition))
+            if (code >= 0)
             {
-                var data = Marshal.PtrToStructure<LowLevelKeyboardData>(dataPointer);
-                PublishSafely(new KeyboardCaptureEvent(
-                    transition,
-                    data.VirtualKey,
-                    data.ScanCode,
-                    (uint)data.Flags,
-                    KeyboardHookMessageMapper.IsInjected(data.Flags)));
+                var data = Marshal.PtrToStructure<LowLevelMouseData>(dataPointer);
+                if (MouseHookMessageMapper.TryMap(code, messageParameter, in data, out var capturedEvent))
+                {
+                    PublishSafely(capturedEvent);
+                }
             }
         }
         catch (Exception exception)
@@ -70,7 +68,7 @@ public sealed class KeyboardHookService : IKeyboardEventSource
 
     [SuppressMessage("Design", "CA1031:Do not catch general exception types",
         Justification = "This method models the exception boundary used by the unmanaged hook callback.")]
-    internal void PublishSafely(KeyboardCaptureEvent capturedEvent)
+    internal void PublishSafely(MouseCaptureEvent capturedEvent)
     {
         try
         {
