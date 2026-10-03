@@ -2,7 +2,7 @@
 
 Windows 10 / Windows 11 x64 本地键盘鼠标宏工具，使用 C#、.NET 10 和 WPF。
 
-**当前已完成 Phase 0–4，包括领域模型、RecordingSession、显式启动的全局键盘/鼠标录制边界和基础鼠标移动采样。尚无统一 Recorder、持久化、回放或输入注入。**
+**当前已完成 Phase 0–5，包括领域模型、RecordingSession、显式启动的全局键盘/鼠标录制边界、基础鼠标移动采样和统一录制生命周期。尚无持久化、回放或输入注入。**
 每个 Phase 独立实现、测试、检查和提交，报告后等待用户确认；不得自动进入下一阶段。
 
 ## 开发环境
@@ -42,6 +42,7 @@ docs/
   phase-2-report.md             单调时钟、录制会话及并发边界记录
   phase-3-report.md             全局键盘 Hook、录制集成及资源生命周期记录
   phase-4-report.md             全局鼠标 Hook、移动采样及资源生命周期记录
+  phase-5-report.md             统一录制生命周期、回滚、并发及真实键鼠验收记录
 ```
 
 依赖方向：`App → Core + Infrastructure`，`Infrastructure → Core`。
@@ -161,4 +162,18 @@ Phase 1 JSON schema 未修改。当前仍没有 Keyboard/Mouse Hook、MouseMove 
 当前没有 Unified Recorder 或正式 WPF 录制入口，应用启动和 Idle 不会自动安装 Hook。
 详细报告见 `docs/phase-4-report.md`。
 
-下一阶段仅建议 **Phase 5 — Unified Recorder**；收到明确确认后再执行。
+## Phase 5 统一录制生命周期
+
+- `UnifiedRecorder` 独占每次 `RecordingSession`，按 Keyboard → Mouse 顺序启动，并在两者都成功后进入 `Recording`。
+- `StopRecording` 先停止两个输入 Recorder，再停止 Session 并返回不可变 `RecordingResult`；键鼠事件直接进入同一 Session，不做 Merge 或 Sort。
+- `CancelRecording` 停止输入并取消 Session，不产生正式结果；Stop / Cancel 后都可创建全新的 Session 再次录制。
+- 部分启动失败会反向回滚已尝试组件并取消 Session；Stop、Cancel、Dispose 对每项资源执行 best-effort cleanup，多项失败使用 `AggregateException` 汇总。
+- `Stopped / Starting / Recording / Stopping / Cancelling / Disposed` 单一状态机替代多组 bool；生命周期操作串行化，输入 callback 不经过协调器锁。
+- 组件边界由最小 `IKeyboardRecorder` / `IMouseRecorder` 接口表达，便于确定性注入启动、停止和释放失败。
+
+全量测试 228 项通过（Phase 5 新增 22 项），0 failed / 0 skipped；Release Build 为 0 warnings / 0 errors。
+真实统一录制验收第一段收到 689 个事件（键盘 30、鼠标 659），指定操作和混合时间线通过；第二次录制、Cancel 后恢复、Hook cleanup 全部通过。
+当前 `RecordingResult` 仍只存在内存中，App 尚未接入正式录制 UI；没有实现 JSON 文件 IO、Validator 或 Playback。
+详细报告见 `docs/phase-5-report.md`。
+
+下一阶段仅建议 **Phase 6 — Macro JSON Persistence**；收到明确确认后再执行。

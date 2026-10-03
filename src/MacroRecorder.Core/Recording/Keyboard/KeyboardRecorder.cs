@@ -6,7 +6,7 @@ namespace MacroRecorder.Core.Recording.Keyboard;
 /// Maps captured keyboard facts into the active RecordingSession. Stop the recorder before
 /// stopping its session so any callback already in progress can finish safely.
 /// </summary>
-public sealed class KeyboardRecorder : IDisposable
+public sealed class KeyboardRecorder : IKeyboardRecorder
 {
     private readonly object lifecycleSync = new();
     private readonly object callbackSync = new();

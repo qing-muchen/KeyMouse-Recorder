@@ -6,7 +6,7 @@ namespace MacroRecorder.Core.Recording.Mouse;
 /// Applies mouse recording policy and maps captured facts into the active RecordingSession.
 /// Stop the recorder before stopping its session so an in-flight callback can finish safely.
 /// </summary>
-public sealed class MouseRecorder : IDisposable
+public sealed class MouseRecorder : IMouseRecorder
 {
     private readonly object lifecycleSync = new();
     private readonly object callbackSync = new();
