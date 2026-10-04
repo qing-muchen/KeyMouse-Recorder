@@ -2,7 +2,7 @@
 
 Windows 10 / Windows 11 x64 本地键盘鼠标宏工具，使用 C#、.NET 10 和 WPF。
 
-**当前已完成 Phase 0–9，包括领域模型、统一键鼠录制、安全 JSON 持久化、语义校验、本地 Macro Library 和 Windows SendInput 单事件注入。尚无回放引擎。**
+**当前已完成 Phase 0–10，包括领域模型、统一键鼠录制、安全 JSON 持久化、语义校验、本地 Macro Library、Windows SendInput 和基础 1.0× 时间线回放。**
 每个 Phase 独立实现、测试、检查和提交，报告后等待用户确认；不得自动进入下一阶段。
 
 ## 开发环境
@@ -47,6 +47,7 @@ docs/
   phase-7-report.md             Macro 语义规则、结构化问题及纯验证边界记录
   phase-8-report.md             本地 Macro Library、路径边界及损坏资产隔离记录
   phase-9-report.md             SendInput 映射、虚拟桌面坐标及真实安全注入记录
+  phase-10-report.md            基础回放、绝对时间调度、尾部时长及重复执行记录
 ```
 
 依赖方向：`App → Core + Infrastructure`，`Infrastructure → Core`。
@@ -239,4 +240,19 @@ Phase 1 JSON schema 未修改。当前仍没有 Keyboard/Mouse Hook、MouseMove 
 当前尚无 PlaybackEngine、PlaybackSession、速度、Pause/Resume、Stop/Emergency Stop 或 UI 播放入口。
 详细报告见 `docs/phase-9-report.md`。
 
-下一阶段仅建议 **Phase 10 — Playback Engine Basic**；收到明确确认后再执行。
+## Phase 10 Basic Playback Engine
+
+- Core 的 `PlaybackEngine` 接收已构造的 Macro，通过 `MacroValidator` gate 后按 Events 原顺序执行一次。
+- `IPlaybackScheduler` 使用同一次 playback start 和每个 `TimestampUs` 的绝对 elapsed target；不按前一事件 delta 累加等待。
+- Infrastructure 的 `SystemPlaybackScheduler` 复用 Stopwatch 单调时钟，使用异步粗等待和短 yield，不使用 wall clock 或永久后台线程。
+- Event 注入完成后继续等待 `Recording.DurationUs`，保留最后事件后的 idle tail；空 Macro 同样保留正 duration。
+- `PlaybackResult` 返回领域事件注入数、计划总时长和实际单调 elapsed；验证、Scheduler 或 Injector 失败均传播并恢复 Idle。
+- Engine 拒绝 concurrent Play，成功或失败后均可重用；同一 Macro 可连续播放且不会被修改或消费。
+- Phase 10 固定 1.0×，`PlaybackMetadata.DefaultSpeed` 尚不参与 target 计算。
+
+全量测试 510 项通过（Phase 10 新增 38 项），0 failed / 0 skipped；Release Build 为 0 warnings / 0 errors。
+真实验证覆盖键盘、鼠标、混合顺序、同一 Macro 重播、idle tail、0/500/1000 ms 时间观察及整段 Playback 的 Recorder injected filtering。
+当前尚无速度控制、Pause/Resume、Stop/Emergency Stop、stuck-input cleanup、环境适配或 WPF Playback UI。
+详细报告见 `docs/phase-10-report.md`。
+
+下一阶段仅建议 **Phase 11 — Playback Speed**；收到明确确认后再执行。
