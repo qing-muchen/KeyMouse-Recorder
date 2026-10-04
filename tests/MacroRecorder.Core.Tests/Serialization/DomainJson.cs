@@ -1,17 +1,10 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
+using MacroRecorder.Infrastructure.Persistence;
 
 namespace MacroRecorder.Core.Tests.Serialization;
 
-/// <summary>In-memory schema v1 proof only. File serialization services belong to Phase 6.</summary>
+/// <summary>Phase 1 contract tests use the same frozen options as the production serializer.</summary>
 internal static class DomainJson
 {
-    public static JsonSerializerOptions Options { get; } = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = true,
-        RespectNullableAnnotations = true,
-        RespectRequiredConstructorParameters = true,
-        Converters = { new JsonStringEnumConverter(allowIntegerValues: false) },
-    };
+    public static JsonSerializerOptions Options => MacroJsonSerializer.SerializerOptions;
 }

@@ -2,7 +2,7 @@
 
 Windows 10 / Windows 11 x64 本地键盘鼠标宏工具，使用 C#、.NET 10 和 WPF。
 
-**当前已完成 Phase 0–5，包括领域模型、RecordingSession、显式启动的全局键盘/鼠标录制边界、基础鼠标移动采样和统一录制生命周期。尚无持久化、回放或输入注入。**
+**当前已完成 Phase 0–6，包括领域模型、统一键鼠录制生命周期，以及可重复读取的安全 Macro JSON 保存/加载。尚无语义校验、Macro Library、回放或输入注入。**
 每个 Phase 独立实现、测试、检查和提交，报告后等待用户确认；不得自动进入下一阶段。
 
 ## 开发环境
@@ -43,6 +43,7 @@ docs/
   phase-3-report.md             全局键盘 Hook、录制集成及资源生命周期记录
   phase-4-report.md             全局鼠标 Hook、移动采样及资源生命周期记录
   phase-5-report.md             统一录制生命周期、回滚、并发及真实键鼠验收记录
+  phase-6-report.md             Macro JSON 契约、原子保存、重复读取及失败保护记录
 ```
 
 依赖方向：`App → Core + Infrastructure`，`Infrastructure → Core`。
@@ -176,4 +177,19 @@ Phase 1 JSON schema 未修改。当前仍没有 Keyboard/Mouse Hook、MouseMove 
 当前 `RecordingResult` 仍只存在内存中，App 尚未接入正式录制 UI；没有实现 JSON 文件 IO、Validator 或 Playback。
 详细报告见 `docs/phase-5-report.md`。
 
-下一阶段仅建议 **Phase 6 — Macro JSON Persistence**；收到明确确认后再执行。
+## Phase 6 Macro JSON 持久化
+
+- `MacroJsonSerializer` 使用异步 Stream API 和 System.Text.Json；磁盘保存不构造完整 JSON string。
+- 唯一生产配置采用 camelCase、缩进、字符串 Enum（拒绝数字）、required / nullable 检查，并冻结防止运行时修改。
+- Phase 1 contract tests 直接引用该生产配置；`kind: keyboard / mouse`、SchemaVersion 1 和字段结构未变化。
+- `MacroFileStore` 只对调用者明确传入的路径执行 Save / Load；Save 自动创建该路径的父目录。
+- Save 先写同目录唯一 `*.tmp`，Flush 到磁盘并关闭句柄，再用同卷 `File.Move(..., overwrite: true)` 单次提交；从不先删除正式文件。
+- 序列化失败或取消时旧目标保持原字节，新目标不出现，临时文件执行 best-effort cleanup；清理错误不会覆盖主异常。
+- Load 是纯读取，可对同一文件重复执行，不修改、移动、删除或消费 JSON。
+
+全量测试 255 项通过（Phase 6 新增 27 项），0 failed / 0 skipped；Release Build 为 0 warnings / 0 errors。
+真实磁盘验证完成 Save、连续三次 Load、源字节不变、覆盖保存和再次 Load；10,000 事件 smoke 文件为 1,828,270 bytes，保存和读取成功且无临时文件残留。
+当前 App 尚未接入 Save/Open UI；Persistence 不构造 Macro metadata，也不执行 Schema 支持范围、时间顺序或 EventCount 一致性等语义校验。
+详细报告见 `docs/phase-6-report.md`。
+
+下一阶段仅建议 **Phase 7 — Macro Validation**；收到明确确认后再执行。
