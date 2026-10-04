@@ -2,7 +2,7 @@
 
 Windows 10 / Windows 11 x64 本地键盘鼠标宏工具，使用 C#、.NET 10 和 WPF。
 
-**当前已完成 Phase 0–8，包括领域模型、统一键鼠录制、安全 JSON 持久化、语义校验及本地 Macro Library。尚无回放或输入注入。**
+**当前已完成 Phase 0–9，包括领域模型、统一键鼠录制、安全 JSON 持久化、语义校验、本地 Macro Library 和 Windows SendInput 单事件注入。尚无回放引擎。**
 每个 Phase 独立实现、测试、检查和提交，报告后等待用户确认；不得自动进入下一阶段。
 
 ## 开发环境
@@ -29,8 +29,8 @@ Windows 10 / Windows 11 x64 本地键盘鼠标宏工具，使用 C#、.NET 10 �
 MacroRecorder.slnx
 src/
   MacroRecorder.App/             WPF 启动组合、基础窗口、只读 ViewModel
-  MacroRecorder.Core/            与 UI/Win32/IO 无关的领域模型、语义验证和日志边界
-  MacroRecorder.Infrastructure/  本地目录、Macro Library、结构化日志、Windows 键盘/鼠标 Hook
+  MacroRecorder.Core/            与 UI/Win32/IO 无关的领域模型、语义验证、日志和输入注入边界
+  MacroRecorder.Infrastructure/  本地目录、Macro Library、结构化日志、Windows Hook 与 SendInput
 tests/
   MacroRecorder.Core.Tests/      领域模型、JSON 往返、基础设施及资源释放测试
 scripts/
@@ -46,6 +46,7 @@ docs/
   phase-6-report.md             Macro JSON 契约、原子保存、重复读取及失败保护记录
   phase-7-report.md             Macro 语义规则、结构化问题及纯验证边界记录
   phase-8-report.md             本地 Macro Library、路径边界及损坏资产隔离记录
+  phase-9-report.md             SendInput 映射、虚拟桌面坐标及真实安全注入记录
 ```
 
 依赖方向：`App → Core + Infrastructure`，`Infrastructure → Core`。
@@ -224,4 +225,18 @@ Phase 1 JSON schema 未修改。当前仍没有 Keyboard/Mouse Hook、MouseMove 
 当前尚无 Playback、SendInput、Global Hotkeys、WPF Macro Library UI、Schema Migration 或 nested folders。
 详细报告见 `docs/phase-8-report.md`。
 
-下一阶段仅建议 **Phase 9 — Input Injector**；收到明确确认后再执行。
+## Phase 9 Windows Input Injector
+
+- Core 的 `IInputInjector` 保持平台无关；`WindowsInputInjector` 每次只立即注入一个 `InputEvent`，不负责 Timeline 或 Macro。
+- 键盘优先使用 Scan Code；ScanCode 为 0 时回退 VirtualKey。KeyUp、ExtendedKey 明确映射，低层 Hook flags 不会原样复制。
+- 鼠标使用当前 Virtual Desktop，按 `(coordinate - origin) * 65535 / (length - 1)` 归一化；支持负原点并拒绝越界坐标。
+- Button 和 Wheel 使用单次 SendInput batch：先绝对移动，再注入动作；支持 Left/Right/Middle/XButton1/XButton2 和正负精细滚轮 delta。
+- 每个原生 INPUT 都带进程内稳定 `dwExtraInfo` marker；SendInput 少注入任何一项都会抛出含请求数、实际数和 Win32 error 的异常。
+- 自动测试通过可替换 native boundary 捕获 INPUT，不向真实桌面发送输入；真实注入只在本阶段专用临时窗口中执行并已清理。
+
+全量测试 472 项通过（Phase 9 新增 66 项），0 failed / 0 skipped；Release Build 为 0 warnings / 0 errors。
+真实验证覆盖 A、Shift+A、100 次安全鼠标移动、左键、垂直滚轮及 Recorder 隔离；Hook 观察到 injected 事件，而隔离 RecordingResult 为 0。
+当前尚无 PlaybackEngine、PlaybackSession、速度、Pause/Resume、Stop/Emergency Stop 或 UI 播放入口。
+详细报告见 `docs/phase-9-report.md`。
+
+下一阶段仅建议 **Phase 10 — Playback Engine Basic**；收到明确确认后再执行。
