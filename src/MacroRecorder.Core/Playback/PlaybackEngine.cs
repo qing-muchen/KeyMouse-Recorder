@@ -4,9 +4,12 @@ using MacroRecorder.Core.Validation;
 
 namespace MacroRecorder.Core.Playback;
 
-/// <summary>Plays one validated Macro at its recorded 1.0x timeline.</summary>
+/// <summary>Plays one validated Macro at a positive finite runtime speed.</summary>
 public sealed class PlaybackEngine
 {
+    private const double DefaultPlaybackSpeed = 1.0;
+    private const double LongUpperExclusive = 9_223_372_036_854_775_808d;
+
     private readonly object stateSync = new();
     private readonly IPlaybackScheduler scheduler;
     private readonly IInputInjector inputInjector;
@@ -31,27 +34,34 @@ public sealed class PlaybackEngine
         }
     }
 
-    public async Task<PlaybackResult> PlayAsync(Macro macro)
+    public Task<PlaybackResult> PlayAsync(Macro macro) =>
+        PlayAsync(macro, DefaultPlaybackSpeed);
+
+    public async Task<PlaybackResult> PlayAsync(Macro macro, double speed)
     {
         ArgumentNullException.ThrowIfNull(macro);
-        BeginPlayback(macro);
+        ValidateSpeed(speed);
+        ValidateMacro(macro);
+        BeginPlayback();
 
         try
         {
+            var scaledEventTargetsUs = ScaleTimeline(macro, speed);
+            var scaledDurationUs = ScaleTimestamp(macro.Recording.DurationUs, speed);
             var playbackStartTimestampUs = scheduler.GetTimestampMicroseconds();
             var injectedEventCount = 0;
 
-            foreach (var inputEvent in macro.Events)
+            for (var index = 0; index < macro.Events.Length; index++)
             {
                 await scheduler
-                    .WaitUntilElapsedAsync(playbackStartTimestampUs, inputEvent.TimestampUs)
+                    .WaitUntilElapsedAsync(playbackStartTimestampUs, scaledEventTargetsUs[index])
                     .ConfigureAwait(false);
-                inputInjector.Inject(inputEvent);
+                inputInjector.Inject(macro.Events[index]);
                 injectedEventCount++;
             }
 
             await scheduler
-                .WaitUntilElapsedAsync(playbackStartTimestampUs, macro.Recording.DurationUs)
+                .WaitUntilElapsedAsync(playbackStartTimestampUs, scaledDurationUs)
                 .ConfigureAwait(false);
 
             var actualElapsedUs = GetSafeElapsed(
@@ -59,8 +69,9 @@ public sealed class PlaybackEngine
                 playbackStartTimestampUs);
             return new PlaybackResult(
                 injectedEventCount,
-                macro.Recording.DurationUs,
-                actualElapsedUs);
+                scaledDurationUs,
+                actualElapsedUs,
+                speed);
         }
         finally
         {
@@ -68,19 +79,60 @@ public sealed class PlaybackEngine
         }
     }
 
-    private void BeginPlayback(Macro macro)
+    private static void ValidateSpeed(double speed)
+    {
+        if (!double.IsFinite(speed) || speed <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(speed),
+                speed,
+                "Playback speed must be a finite value greater than zero.");
+        }
+    }
+
+    private static long[] ScaleTimeline(Macro macro, double speed)
+    {
+        var scaledTargetsUs = new long[macro.Events.Length];
+        for (var index = 0; index < macro.Events.Length; index++)
+        {
+            scaledTargetsUs[index] = ScaleTimestamp(macro.Events[index].TimestampUs, speed);
+        }
+
+        return scaledTargetsUs;
+    }
+
+    private static long ScaleTimestamp(long timestampUs, double speed)
+    {
+        if (timestampUs == 0 || speed == DefaultPlaybackSpeed)
+        {
+            return timestampUs;
+        }
+
+        var scaledTimestampUs = timestampUs / speed;
+        if (!double.IsFinite(scaledTimestampUs) || scaledTimestampUs >= LongUpperExclusive)
+        {
+            throw new PlaybackTimingException(timestampUs, speed);
+        }
+
+        return checked((long)Math.Round(scaledTimestampUs, MidpointRounding.AwayFromZero));
+    }
+
+    private static void ValidateMacro(Macro macro)
+    {
+        var validationResult = MacroValidator.Validate(macro);
+        if (!validationResult.IsValid)
+        {
+            throw new PlaybackValidationException(validationResult);
+        }
+    }
+
+    private void BeginPlayback()
     {
         lock (stateSync)
         {
             if (state == PlaybackState.Playing)
             {
                 throw new InvalidOperationException("A Macro is already playing.");
-            }
-
-            var validationResult = MacroValidator.Validate(macro);
-            if (!validationResult.IsValid)
-            {
-                throw new PlaybackValidationException(validationResult);
             }
 
             state = PlaybackState.Playing;

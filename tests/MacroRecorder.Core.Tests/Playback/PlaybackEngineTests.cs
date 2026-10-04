@@ -150,6 +150,200 @@ public sealed class PlaybackEngineTests
         await engine.PlayAsync(macro);
 
         Assert.Equal([100_000, 200_000], scheduler.RequestedTargets);
+        Assert.Equal(4.0, macro.Playback.DefaultSpeed);
+    }
+
+    [Theory]
+    [InlineData(0.25, 400_000, 800_000, 1_600_000)]
+    [InlineData(1.0, 100_000, 200_000, 400_000)]
+    [InlineData(2.0, 50_000, 100_000, 200_000)]
+    [InlineData(4.0, 25_000, 50_000, 100_000)]
+    [InlineData(0.5, 200_000, 400_000, 800_000)]
+    public async Task RuntimeSpeedScalesAbsoluteEventAndDurationTargets(
+        double speed,
+        long firstTargetUs,
+        long secondTargetUs,
+        long durationTargetUs)
+    {
+        var events = ImmutableArray.Create<InputEvent>(KeyDown(100_000), KeyUp(200_000));
+        var (engine, scheduler, injector) = CreateEngine();
+
+        var result = await engine.PlayAsync(CreateMacro(events, 400_000), speed);
+
+        Assert.Equal([firstTargetUs, secondTargetUs, durationTargetUs], scheduler.RequestedTargets);
+        Assert.Equal(events, injector.InjectedEvents);
+        Assert.Equal(durationTargetUs, result.ScheduledDurationUs);
+        Assert.Equal(durationTargetUs, result.ActualElapsedUs);
+        Assert.Equal(speed, result.PlaybackSpeed);
+    }
+
+    [Theory]
+    [InlineData(0.01, 10_000)]
+    [InlineData(100.0, 1)]
+    public async Task PositiveFiniteSpeedsAreNotArtificiallyRangeLimited(
+        double speed,
+        long expectedTargetUs)
+    {
+        var (engine, scheduler, _) = CreateEngine();
+
+        var result = await engine.PlayAsync(CreateMacro([KeyDown(100)], 100), speed);
+
+        Assert.Equal([expectedTargetUs, expectedTargetUs], scheduler.RequestedTargets);
+        Assert.Equal(speed, result.PlaybackSpeed);
+    }
+
+    [Theory]
+    [InlineData(0.0)]
+    [InlineData(-1.0)]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NegativeInfinity)]
+    public async Task InvalidSpeedIsRejectedBeforeMacroValidationSchedulerOrInjector(double speed)
+    {
+        var invalidMacro = CreateMacro([], 0) with
+        {
+            SchemaVersion = MacroSchema.CurrentVersion + 1,
+        };
+        var (engine, scheduler, injector) = CreateEngine();
+
+        var exception = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => engine.PlayAsync(invalidMacro, speed));
+
+        Assert.Equal("speed", exception.ParamName);
+        Assert.Equal(0, scheduler.GetTimestampCallCount);
+        Assert.Empty(scheduler.RequestedTargets);
+        Assert.Empty(injector.InjectedEvents);
+        Assert.Equal(PlaybackState.Idle, engine.State);
+    }
+
+    [Fact]
+    public async Task ExplicitSpeedPreservesSameTimestampOrder()
+    {
+        var first = KeyDown(100);
+        var second = Button(100, InputEventType.MouseButtonDown);
+        var third = KeyUp(100);
+        var events = ImmutableArray.Create<InputEvent>(first, second, third);
+        var (engine, scheduler, injector) = CreateEngine();
+
+        await engine.PlayAsync(CreateMacro(events, 100), 2.0);
+
+        Assert.Equal([first, second, third], injector.InjectedEvents);
+        Assert.Equal([50, 50, 50, 50], scheduler.RequestedTargets);
+    }
+
+    [Fact]
+    public async Task ExplicitSpeedKeepsTimestampZeroAtZero()
+    {
+        var (engine, scheduler, injector) = CreateEngine(initialTimestampUs: 45_000);
+
+        await engine.PlayAsync(CreateMacro([KeyDown(0)], 0), 4.0);
+
+        Assert.Equal([0, 0], scheduler.RequestedTargets);
+        Assert.Equal([0], injector.InjectionElapsedTimes);
+    }
+
+    [Fact]
+    public async Task SpeedScalingRoundsFractionalMicrosecondsAwayFromZero()
+    {
+        var (engine, scheduler, _) = CreateEngine();
+
+        await engine.PlayAsync(CreateMacro([KeyDown(1)], 1), 2.0);
+
+        Assert.Equal([1, 1], scheduler.RequestedTargets);
+    }
+
+    [Fact]
+    public async Task LateEventBehaviorUsesScaledAbsoluteTargets()
+    {
+        var events = ImmutableArray.Create<InputEvent>(KeyDown(100), KeyUp(110), KeyDown(120));
+        var (engine, scheduler, injector) = CreateEngine();
+        scheduler.AdvanceBeforeWait.Enqueue(75);
+
+        await engine.PlayAsync(CreateMacro(events, 150), 2.0);
+
+        Assert.Equal(events, injector.InjectedEvents);
+        Assert.Equal([75, 75, 75], injector.InjectionElapsedTimes);
+        Assert.Equal([50, 55, 60, 75], scheduler.RequestedTargets);
+    }
+
+    [Fact]
+    public async Task EmptyMacroDurationIsScaled()
+    {
+        var (engine, scheduler, injector) = CreateEngine();
+
+        var result = await engine.PlayAsync(CreateMacro([], 10_000_000), 2.0);
+
+        Assert.Empty(injector.InjectedEvents);
+        Assert.Equal([5_000_000], scheduler.RequestedTargets);
+        Assert.Equal(5_000_000, result.ScheduledDurationUs);
+        Assert.Equal(5_000_000, result.ActualElapsedUs);
+    }
+
+    [Fact]
+    public async Task LargeTimestampCanBeSafelyScaled()
+    {
+        const long expectedTargetUs = 4_611_686_018_427_387_904;
+        var (engine, scheduler, _) = CreateEngine();
+
+        var result = await engine.PlayAsync(
+            CreateMacro([KeyDown(long.MaxValue)], long.MaxValue),
+            2.0);
+
+        Assert.Equal([expectedTargetUs, expectedTargetUs], scheduler.RequestedTargets);
+        Assert.Equal(expectedTargetUs, result.ScheduledDurationUs);
+        Assert.DoesNotContain(scheduler.RequestedTargets, static target => target < 0);
+    }
+
+    [Fact]
+    public async Task UnrepresentableScaledTimestampFailsBeforeSchedulerOrInjector()
+    {
+        var macro = CreateMacro([KeyDown(long.MaxValue)], long.MaxValue);
+        var (engine, scheduler, injector) = CreateEngine();
+
+        var exception = await Assert.ThrowsAsync<PlaybackTimingException>(
+            () => engine.PlayAsync(macro, 0.01));
+
+        Assert.Equal(long.MaxValue, exception.OriginalTimestampUs);
+        Assert.Equal(0.01, exception.PlaybackSpeed);
+        Assert.Equal(0, scheduler.GetTimestampCallCount);
+        Assert.Empty(scheduler.RequestedTargets);
+        Assert.Empty(injector.InjectedEvents);
+        Assert.Equal(PlaybackState.Idle, engine.State);
+    }
+
+    [Fact]
+    public async Task ExplicitRuntimeSpeedDoesNotModifyMacroOrPlaybackDefaults()
+    {
+        var events = ImmutableArray.Create<InputEvent>(KeyDown(10), KeyUp(20));
+        var macro = CreateMacro(events, 30) with
+        {
+            Playback = new PlaybackMetadata(1.5),
+        };
+        var snapshot = macro with { };
+        var (engine, _, _) = CreateEngine();
+
+        await engine.PlayAsync(macro, 4.0);
+
+        Assert.Equal(snapshot, macro);
+        Assert.Equal(events, macro.Events);
+        Assert.Equal(1.5, macro.Playback.DefaultSpeed);
+    }
+
+    [Fact]
+    public async Task RepeatedPlaybackCanUseDifferentRuntimeSpeeds()
+    {
+        var events = ImmutableArray.Create<InputEvent>(KeyDown(100), KeyUp(200));
+        var macro = CreateMacro(events, 400);
+        var (engine, scheduler, injector) = CreateEngine();
+
+        var fastResult = await engine.PlayAsync(macro, 2.0);
+        var slowResult = await engine.PlayAsync(macro, 0.5);
+
+        Assert.Equal([50, 100, 200, 200, 400, 800], scheduler.RequestedTargets);
+        Assert.Equal([.. events, .. events], injector.InjectedEvents);
+        Assert.Equal(2.0, fastResult.PlaybackSpeed);
+        Assert.Equal(0.5, slowResult.PlaybackSpeed);
+        Assert.Equal(PlaybackState.Idle, engine.State);
     }
 
     [Fact]
@@ -267,11 +461,11 @@ public sealed class PlaybackEngineTests
         injector.ExceptionToThrow = failure;
 
         var actual = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => engine.PlayAsync(CreateMacro(events, 300)));
+            () => engine.PlayAsync(CreateMacro(events, 300), 2.0));
 
         Assert.Same(failure, actual);
         Assert.Equal(expectedInjectedCount, injector.InjectedEvents.Count);
-        Assert.DoesNotContain(300, scheduler.RequestedTargets);
+        Assert.DoesNotContain(150, scheduler.RequestedTargets);
         Assert.Equal(PlaybackState.Idle, engine.State);
     }
 
@@ -359,7 +553,7 @@ public sealed class PlaybackEngineTests
         await scheduler.WaitEntered.Task;
         Assert.Equal(PlaybackState.Playing, engine.State);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => engine.PlayAsync(macro));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => engine.PlayAsync(macro, 2.0));
         Assert.False(firstPlayback.IsCompleted);
 
         scheduler.Release.TrySetResult();
@@ -422,6 +616,28 @@ public sealed class PlaybackEngineTests
     {
         Assert.Throws<ArgumentOutOfRangeException>(
             () => new PlaybackResult(eventCount, scheduledDuration, actualElapsed));
+    }
+
+    [Fact]
+    public void PlaybackResultPreservesBackwardCompatibleDefaultSpeed()
+    {
+        var result = new PlaybackResult(2, 100, 105);
+
+        Assert.Equal(1.0, result.PlaybackSpeed);
+    }
+
+    [Theory]
+    [InlineData(0.0)]
+    [InlineData(-1.0)]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NegativeInfinity)]
+    public void PlaybackResultRejectsInvalidSpeed(double speed)
+    {
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(
+            () => new PlaybackResult(0, 0, 0, speed));
+
+        Assert.Equal("playbackSpeed", exception.ParamName);
     }
 
     private static EngineContext CreateEngine(long initialTimestampUs = 0)

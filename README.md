@@ -2,7 +2,7 @@
 
 Windows 10 / Windows 11 x64 本地键盘鼠标宏工具，使用 C#、.NET 10 和 WPF。
 
-**当前已完成 Phase 0–10，包括领域模型、统一键鼠录制、安全 JSON 持久化、语义校验、本地 Macro Library、Windows SendInput 和基础 1.0× 时间线回放。**
+**当前已完成 Phase 0–11，包括领域模型、统一键鼠录制、安全 JSON 持久化、语义校验、本地 Macro Library、Windows SendInput、基础时间线回放和运行时速度控制。**
 每个 Phase 独立实现、测试、检查和提交，报告后等待用户确认；不得自动进入下一阶段。
 
 ## 开发环境
@@ -48,6 +48,7 @@ docs/
   phase-8-report.md             本地 Macro Library、路径边界及损坏资产隔离记录
   phase-9-report.md             SendInput 映射、虚拟桌面坐标及真实安全注入记录
   phase-10-report.md            基础回放、绝对时间调度、尾部时长及重复执行记录
+  phase-11-report.md            运行时速度、时间线缩放、溢出保护及真实速度观察记录
 ```
 
 依赖方向：`App → Core + Infrastructure`，`Infrastructure → Core`。
@@ -255,4 +256,20 @@ Phase 1 JSON schema 未修改。当前仍没有 Keyboard/Mouse Hook、MouseMove 
 当前尚无速度控制、Pause/Resume、Stop/Emergency Stop、stuck-input cleanup、环境适配或 WPF Playback UI。
 详细报告见 `docs/phase-10-report.md`。
 
-下一阶段仅建议 **Phase 11 — Playback Speed**；收到明确确认后再执行。
+## Phase 11 Playback Speed
+
+- `PlaybackEngine.PlayAsync(macro, speed)` 接受任意正有限运行时速度；已覆盖 `0.01` 到 `100`，UI 范围限制留待后续阶段。
+- 保留 `PlayAsync(macro)`，其行为严格兼容 Phase 10 的 `1.0×`；运行时参数不会写回 `Macro.Playback.DefaultSpeed`。
+- 每个事件和最终 `Recording.DurationUs` 都按 `originalTimestampUs / speed` 缩放，Scheduler 仍只接收从同一个 playback start 起算的绝对 elapsed target。
+- 缩放使用 double 计算并按最接近微秒取整；超出 `long` 可表示范围时，在读取 Scheduler 或调用 Injector 前抛出 `PlaybackTimingException`。
+- 同时间戳事件和原数组顺序保持不变；不排序、不使用逐事件 delta，也不使用 `Thread.Sleep`。
+- `PlaybackResult` 增加实际运行使用的 `PlaybackSpeed`，旧三参数构造器保持 `1.0×` 兼容。
+
+全量测试 537 项通过（Phase 11 新增 27 个参数化测试用例），0 failed / 0 skipped；Release Build 为 0 warnings / 0 errors。
+真实安全键盘验证的 800 ms Macro：1x / 2x / 0.5x 分别观察约 810 / 403 / 1604 ms，每次均收到一组配对 A Down/Up。
+Recorder 活跃时的 2x Playback 注入 2 个事件，RecordingResult 为 0；专用临时验证项目和输出已清理。
+
+当前尚无 Pause/Resume、Stop/Emergency Stop、stuck-input cleanup、Loop/Repeat 或 WPF Playback UI。
+详细报告见 `docs/phase-11-report.md`。
+
+下一阶段仅建议 **Phase 12 — Pause / Resume**；收到明确确认后再执行。
