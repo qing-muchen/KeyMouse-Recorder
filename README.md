@@ -2,7 +2,7 @@
 
 Windows 10 / Windows 11 x64 本地键盘鼠标宏工具，使用 C#、.NET 10 和 WPF。
 
-**当前已完成 Phase 0–6，包括领域模型、统一键鼠录制生命周期，以及可重复读取的安全 Macro JSON 保存/加载。尚无语义校验、Macro Library、回放或输入注入。**
+**当前已完成 Phase 0–7，包括领域模型、统一键鼠录制生命周期、安全 Macro JSON 保存/加载及纯语义校验。尚无 Macro Library、回放或输入注入。**
 每个 Phase 独立实现、测试、检查和提交，报告后等待用户确认；不得自动进入下一阶段。
 
 ## 开发环境
@@ -29,7 +29,7 @@ Windows 10 / Windows 11 x64 本地键盘鼠标宏工具，使用 C#、.NET 10 �
 MacroRecorder.slnx
 src/
   MacroRecorder.App/             WPF 启动组合、基础窗口、只读 ViewModel
-  MacroRecorder.Core/            与 UI/Win32/IO 无关的领域模型和日志边界
+  MacroRecorder.Core/            与 UI/Win32/IO 无关的领域模型、语义验证和日志边界
   MacroRecorder.Infrastructure/  本地目录、结构化文件日志、Windows 键盘/鼠标 Hook
 tests/
   MacroRecorder.Core.Tests/      领域模型、JSON 往返、基础设施及资源释放测试
@@ -44,6 +44,7 @@ docs/
   phase-4-report.md             全局鼠标 Hook、移动采样及资源生命周期记录
   phase-5-report.md             统一录制生命周期、回滚、并发及真实键鼠验收记录
   phase-6-report.md             Macro JSON 契约、原子保存、重复读取及失败保护记录
+  phase-7-report.md             Macro 语义规则、结构化问题及纯验证边界记录
 ```
 
 依赖方向：`App → Core + Infrastructure`，`Infrastructure → Core`。
@@ -72,9 +73,8 @@ RecordingSession 是独立运行时对象；PlaybackSession 和 MacroFile 以后
 独立事件需通过 `JsonSerializer.Serialize<InputEvent>` 序列化，以保留基类多态契约；Macro.Events 已使用该基类。
 Enum 名称和 discriminator 属于 schema v1 契约，未来重命名需要考虑版本兼容。
 
-序列化 options 目前仅放在测试的 `Serialization/DomainJson.cs`：camelCase、可读缩进、字符串 Enum（拒绝整数 Enum），
-并启用必填构造参数及 nullable 检查。后续 Phase 6 文件序列化服务应沿用该配置。
-没有新增 MacroJsonSerializer、文件 IO、验证服务或第三方包。
+Phase 1 最初在测试中定义序列化 options；Phase 6 已将其收敛到 `MacroJsonSerializer` 的冻结生产配置，
+contract tests 直接引用同一配置。领域模型本身仍不依赖文件 IO 或 Infrastructure。
 
 ## 本地目录及日志
 
@@ -192,4 +192,19 @@ Phase 1 JSON schema 未修改。当前仍没有 Keyboard/Mouse Hook、MouseMove 
 当前 App 尚未接入 Save/Open UI；Persistence 不构造 Macro metadata，也不执行 Schema 支持范围、时间顺序或 EventCount 一致性等语义校验。
 详细报告见 `docs/phase-6-report.md`。
 
-下一阶段仅建议 **Phase 7 — Macro Validation**；收到明确确认后再执行。
+## Phase 7 Macro 语义验证
+
+- Core 新增纯 `MacroValidator`，输入 Macro 并返回不可变 `ValidationResult` / `ValidationIssue`，不修改源对象。
+- Issue 包含 `Warning / Error`、稳定 Code、人类可读 Message 和接近 JSON 的 camelCase Path；任何 Error 都会令 `IsValid = false`。
+- 规则覆盖 Schema、ID/Name、Recording metadata、EventCount、Duration、时间线、键鼠字段组合、屏幕 metadata、DPI、默认速度和时间 metadata。
+- Timestamp 必须 non-negative 且 non-decreasing，相同时间合法；Validator 按现有顺序遍历，不排序或修复 Events。
+- 鼠标负坐标和任意非零 signed wheel delta 合法；move/button/wheel 的 Button 与 WheelDelta 组合分别校验。
+- `double.IsFinite` 阻止 NaN / Infinity 绕过 DPI 与速度检查；空 Macro 只产生 Warning，仍可视为有效。
+- MacroFileStore 保持纯 Deserialize；`schemaVersion = 999` 可以加载，再由 Validator 返回 `SCHEMA_VERSION_UNSUPPORTED`。
+
+全量测试 334 项通过（Phase 7 新增 79 项），0 failed / 0 skipped；Release Build 为 0 warnings / 0 errors。
+人工验证确认正常 Macro 有效，下降时间线返回 `TIMESTAMP_DECREASING` 和 `events[1].timestampUs`，重复验证结果一致且 Macro 未改变。
+当前尚无 Macro Library、Playback、SendInput、Global Hotkeys 或正式 WPF 工作流。
+详细报告见 `docs/phase-7-report.md`。
+
+下一阶段仅建议 **Phase 8 — Macro Repository / Library**；收到明确确认后再执行。
