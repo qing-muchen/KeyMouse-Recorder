@@ -2,7 +2,7 @@
 
 Windows 10 / Windows 11 x64 本地键盘鼠标宏工具，使用 C#、.NET 10 和 WPF。
 
-**当前已完成 Phase 0–11，包括领域模型、统一键鼠录制、安全 JSON 持久化、语义校验、本地 Macro Library、Windows SendInput、基础时间线回放和运行时速度控制。**
+**当前已完成 Phase 0–12，包括领域模型、统一键鼠录制、安全 JSON 持久化、语义校验、本地 Macro Library、Windows SendInput、运行时速度控制以及暂停/恢复。**
 每个 Phase 独立实现、测试、检查和提交，报告后等待用户确认；不得自动进入下一阶段。
 
 ## 开发环境
@@ -49,6 +49,7 @@ docs/
   phase-9-report.md             SendInput 映射、虚拟桌面坐标及真实安全注入记录
   phase-10-report.md            基础回放、绝对时间调度、尾部时长及重复执行记录
   phase-11-report.md            运行时速度、时间线缩放、溢出保护及真实速度观察记录
+  phase-12-report.md            PlaybackSession、暂停门、时间线冻结及真实恢复顺序记录
 ```
 
 依赖方向：`App → Core + Infrastructure`，`Infrastructure → Core`。
@@ -272,4 +273,20 @@ Recorder 活跃时的 2x Playback 注入 2 个事件，RecordingResult 为 0；�
 当前尚无 Pause/Resume、Stop/Emergency Stop、stuck-input cleanup、Loop/Repeat 或 WPF Playback UI。
 详细报告见 `docs/phase-11-report.md`。
 
-下一阶段仅建议 **Phase 12 — Pause / Resume**；收到明确确认后再执行。
+## Phase 12 Pause / Resume
+
+- `StartPlayback(macro, speed)` 返回独立 `PlaybackSession` handle；兼容的 `PlayAsync` overload 继续返回最终 PlaybackResult。
+- Session 保存单次运行的 Playing / Paused / Idle、事件游标、Completion、累计暂停时长和异步 resume gate；Macro 不保存运行状态。
+- `PauseAsync` 将 Playing 切换为 Paused，重复 Pause 是 no-op；`ResumeAsync` 将 Paused 切回 Playing，重复 Resume 是 no-op；完成后的控制调用会被拒绝。
+- Active timeline 使用 `wall elapsed - paused duration`。暂停期间即使 monotonic clock 继续前进，也不会注入新事件；恢复后只等待原 timeline 的剩余部分。
+- Scheduler interface 不感知 pause。Session 在恢复后把累计暂停时长加入 absolute target，并在每次注入前再次检查 pause gate，保持 Phase 10 的绝对调度与 Phase 11 的 speed scaling。
+- PlaybackResult 增加 `TotalPausedDurationUs`；ScheduledDuration 仍表示缩放后的 active timeline，ActualElapsed 表示包含暂停的真实耗时。
+
+全量测试 552 项通过（Phase 12 新增 15 项），0 failed / 0 skipped；Release Build 为 0 warnings / 0 errors。
+真实验证确认暂停期间没有 A Up、左键 Click 或 Wheel；恢复后分别执行，混合顺序为 Move → A-Down → A-Up → Wheel。
+Recorder 活跃期间执行带 Pause/Resume 的 2x Playback，注入 2 个事件而 RecordingResult 为 0；临时验证器和输出已清理。
+
+当前尚无 Stop、Emergency Stop、按键/鼠标状态 cleanup、Loop/Repeat 或 WPF Playback UI。
+详细报告见 `docs/phase-12-report.md`。
+
+下一阶段仅建议 **Phase 13 — Stop / Emergency Stop**；收到明确确认后再执行。

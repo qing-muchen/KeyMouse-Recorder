@@ -4,7 +4,7 @@ namespace MacroRecorder.Core.Playback;
 public sealed record PlaybackResult
 {
     public PlaybackResult(int injectedEventCount, long scheduledDurationUs, long actualElapsedUs)
-        : this(injectedEventCount, scheduledDurationUs, actualElapsedUs, 1.0)
+        : this(injectedEventCount, scheduledDurationUs, actualElapsedUs, 1.0, 0)
     {
     }
 
@@ -13,10 +13,21 @@ public sealed record PlaybackResult
         long scheduledDurationUs,
         long actualElapsedUs,
         double playbackSpeed)
+        : this(injectedEventCount, scheduledDurationUs, actualElapsedUs, playbackSpeed, 0)
+    {
+    }
+
+    public PlaybackResult(
+        int injectedEventCount,
+        long scheduledDurationUs,
+        long actualElapsedUs,
+        double playbackSpeed,
+        long totalPausedDurationUs)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(injectedEventCount);
         ArgumentOutOfRangeException.ThrowIfNegative(scheduledDurationUs);
         ArgumentOutOfRangeException.ThrowIfNegative(actualElapsedUs);
+        ArgumentOutOfRangeException.ThrowIfNegative(totalPausedDurationUs);
         if (!double.IsFinite(playbackSpeed) || playbackSpeed <= 0)
         {
             throw new ArgumentOutOfRangeException(
@@ -29,6 +40,7 @@ public sealed record PlaybackResult
         ScheduledDurationUs = scheduledDurationUs;
         ActualElapsedUs = actualElapsedUs;
         PlaybackSpeed = playbackSpeed;
+        TotalPausedDurationUs = totalPausedDurationUs;
     }
 
     public int InjectedEventCount { get; }
@@ -38,4 +50,6 @@ public sealed record PlaybackResult
     public long ActualElapsedUs { get; }
 
     public double PlaybackSpeed { get; }
+
+    public long TotalPausedDurationUs { get; }
 }
