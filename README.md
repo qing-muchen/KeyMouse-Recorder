@@ -2,7 +2,7 @@
 
 Windows 10 / Windows 11 x64 本地键盘鼠标宏工具，使用 C#、.NET 10 和 WPF。
 
-**当前已完成 Phase 0–7，包括领域模型、统一键鼠录制生命周期、安全 Macro JSON 保存/加载及纯语义校验。尚无 Macro Library、回放或输入注入。**
+**当前已完成 Phase 0–8，包括领域模型、统一键鼠录制、安全 JSON 持久化、语义校验及本地 Macro Library。尚无回放或输入注入。**
 每个 Phase 独立实现、测试、检查和提交，报告后等待用户确认；不得自动进入下一阶段。
 
 ## 开发环境
@@ -30,7 +30,7 @@ MacroRecorder.slnx
 src/
   MacroRecorder.App/             WPF 启动组合、基础窗口、只读 ViewModel
   MacroRecorder.Core/            与 UI/Win32/IO 无关的领域模型、语义验证和日志边界
-  MacroRecorder.Infrastructure/  本地目录、结构化文件日志、Windows 键盘/鼠标 Hook
+  MacroRecorder.Infrastructure/  本地目录、Macro Library、结构化日志、Windows 键盘/鼠标 Hook
 tests/
   MacroRecorder.Core.Tests/      领域模型、JSON 往返、基础设施及资源释放测试
 scripts/
@@ -45,6 +45,7 @@ docs/
   phase-5-report.md             统一录制生命周期、回滚、并发及真实键鼠验收记录
   phase-6-report.md             Macro JSON 契约、原子保存、重复读取及失败保护记录
   phase-7-report.md             Macro 语义规则、结构化问题及纯验证边界记录
+  phase-8-report.md             本地 Macro Library、路径边界及损坏资产隔离记录
 ```
 
 依赖方向：`App → Core + Infrastructure`，`Infrastructure → Core`。
@@ -82,7 +83,7 @@ contract tests 直接引用同一配置。领域模型本身仍不依赖文件 I
 
 ```text
 data/
-  macros/               未来存放用户 Macro JSON
+  macros/               本地单目录 Macro JSON Library
   config/               Phase 19 实现 settings.json
   logs/                 每个应用实例一个 session-*.jsonl
 ```
@@ -207,4 +208,20 @@ Phase 1 JSON schema 未修改。当前仍没有 Keyboard/Mouse Hook、MouseMove 
 当前尚无 Macro Library、Playback、SendInput、Global Hotkeys 或正式 WPF 工作流。
 详细报告见 `docs/phase-7-report.md`。
 
-下一阶段仅建议 **Phase 8 — Macro Repository / Library**；收到明确确认后再执行。
+## Phase 8 本地 Macro Repository / Library
+
+- `MacroRepository` 管理一个明确绝对路径下的单目录 JSON Library；每次 `ListAsync` 直接扫描当前磁盘，无缓存或 FileSystemWatcher。
+- List 只读取直接子级 `.json`（大小写不敏感），忽略非 JSON、残留 `.tmp` 和嵌套目录，并按 filename 稳定排序。
+- `MacroLibraryEntry` 只保留 metadata 摘要、ValidationResult 或短错误信息，不常驻完整 Macro / Events。
+- Entry 状态为 Valid / Invalid / Unreadable；Warning-only Macro 仍为 Valid，单个损坏文件不会中止整个列表。
+- `LoadAsync` 返回完整 Macro + ValidationResult；malformed JSON 明确抛错，Invalid Macro 返回原数据和结构化 Issues。
+- Save 复用 Phase 6 atomic MacroFileStore，并在写入前验证；Error 拒绝且携带 ValidationResult，Warning 允许。
+- 不同 filename 的 Save 提供 Save As；Rename 只移动文件且不改变 Macro.Name / UpdatedAt / ID；Delete 永久删除明确文件。
+- 所有操作只接受直接库内逻辑 filename；自动补 `.json`，拒绝绝对路径、traversal、嵌套路径和非 JSON 扩展名。
+
+全量测试 406 项通过（Phase 8 新增 72 项），0 failed / 0 skipped；Release Build 为 0 warnings / 0 errors。
+人工临时 Library 验证覆盖 Valid / Invalid / Unreadable 隔离、Load、Rename、Save As、Delete，以及忽略并保留 txt/tmp 文件。
+当前尚无 Playback、SendInput、Global Hotkeys、WPF Macro Library UI、Schema Migration 或 nested folders。
+详细报告见 `docs/phase-8-report.md`。
+
+下一阶段仅建议 **Phase 9 — Input Injector**；收到明确确认后再执行。
