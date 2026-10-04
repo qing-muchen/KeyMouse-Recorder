@@ -24,12 +24,19 @@ public sealed class SystemPlaybackScheduler : IPlaybackScheduler
 
     public long GetTimestampMicroseconds() => clock.GetTimestampMicroseconds();
 
-    public async Task WaitUntilElapsedAsync(long playbackStartTimestampUs, long targetElapsedUs)
+    public Task WaitUntilElapsedAsync(long playbackStartTimestampUs, long targetElapsedUs) =>
+        WaitUntilElapsedAsync(playbackStartTimestampUs, targetElapsedUs, CancellationToken.None);
+
+    public async Task WaitUntilElapsedAsync(
+        long playbackStartTimestampUs,
+        long targetElapsedUs,
+        CancellationToken cancellationToken)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(targetElapsedUs);
 
         while (true)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var currentTimestampUs = clock.GetTimestampMicroseconds();
             var elapsedUs = (Int128)currentTimestampUs - playbackStartTimestampUs;
             if (elapsedUs >= targetElapsedUs)
@@ -44,7 +51,7 @@ public sealed class SystemPlaybackScheduler : IPlaybackScheduler
                 var delayMilliseconds = (int)Int128.Min(
                     coarseDelayUs / 1_000,
                     MaximumDelayMilliseconds);
-                await Task.Delay(Math.Max(1, delayMilliseconds)).ConfigureAwait(false);
+                await Task.Delay(Math.Max(1, delayMilliseconds), cancellationToken).ConfigureAwait(false);
             }
             else
             {

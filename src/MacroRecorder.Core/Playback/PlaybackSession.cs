@@ -1,10 +1,16 @@
+using System.Diagnostics.CodeAnalysis;
+using System.Runtime.ExceptionServices;
 using MacroRecorder.Core.InputInjection;
 using MacroRecorder.Core.Models;
 using MacroRecorder.Core.Models.Input;
 
 namespace MacroRecorder.Core.Playback;
 
-/// <summary>Owns the runtime state and pause gate for one Macro playback.</summary>
+/// <summary>Owns the runtime state, cancellation, and pressed-input state for one Macro playback.</summary>
+[SuppressMessage(
+    "Design",
+    "CA1001:Types that own disposable fields should be disposable",
+    Justification = "The session owns and disposes its cancellation source when its mandatory completion task finishes.")]
 public sealed class PlaybackSession
 {
     private const double DefaultPlaybackSpeed = 1.0;
@@ -19,12 +25,17 @@ public sealed class PlaybackSession
     private readonly long[] scaledEventTargetsUs;
     private readonly long scaledDurationUs;
     private readonly long playbackStartTimestampUs;
+    private readonly CancellationTokenSource stopCancellation = new();
+    private readonly PressedInputTracker pressedInputs = new();
+    private readonly List<Exception> controlFailures = [];
     private TaskCompletionSource resumeSignal = CreateResumeSignal();
     private Task<PlaybackResult>? completion;
     private PlaybackState state = PlaybackState.Playing;
+    private PlaybackCompletionReason requestedCompletionReason = PlaybackCompletionReason.Completed;
     private int currentEventIndex;
     private long totalPausedDurationUs;
     private long pauseStartedTimestampUs;
+    private bool stopRequested;
 
     internal PlaybackSession(
         Macro macro,
@@ -94,9 +105,9 @@ public sealed class PlaybackSession
     {
         lock (stateSync)
         {
-            if (state == PlaybackState.Idle)
+            if (state is PlaybackState.Idle or PlaybackState.Stopping)
             {
-                throw new InvalidOperationException("A completed playback session cannot be paused.");
+                throw new InvalidOperationException("A stopping or completed playback session cannot be paused.");
             }
 
             if (state == PlaybackState.Paused)
@@ -115,9 +126,9 @@ public sealed class PlaybackSession
     {
         lock (stateSync)
         {
-            if (state == PlaybackState.Idle)
+            if (state is PlaybackState.Idle or PlaybackState.Stopping)
             {
-                throw new InvalidOperationException("A completed playback session cannot be resumed.");
+                throw new InvalidOperationException("A stopping or completed playback session cannot be resumed.");
             }
 
             if (state == PlaybackState.Playing)
@@ -143,6 +154,13 @@ public sealed class PlaybackSession
         }
     }
 
+    /// <summary>Ends playback, releases held inputs, and returns the session completion.</summary>
+    public Task<PlaybackResult> StopAsync() => RequestStop(PlaybackCompletionReason.Stopped);
+
+    /// <summary>Immediately interrupts playback and prioritizes input-state cleanup.</summary>
+    public Task<PlaybackResult> EmergencyStopAsync() =>
+        RequestStop(PlaybackCompletionReason.EmergencyStopped);
+
     internal void Start()
     {
         lock (stateSync)
@@ -156,10 +174,15 @@ public sealed class PlaybackSession
         }
     }
 
+    [SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification = "Playback and cleanup failures must be combined after every held input has been released.")]
     private async Task<PlaybackResult> RunAsync()
     {
         await Task.Yield();
 
+        Exception? playbackFailure = null;
         try
         {
             for (var index = 0; index < macro.Events.Length; index++)
@@ -168,17 +191,41 @@ public sealed class PlaybackSession
                     .ConfigureAwait(false);
             }
 
-            return await CompleteWhenDueAsync().ConfigureAwait(false);
+            await WaitForCompletionDueAsync().ConfigureAwait(false);
         }
-        catch
+        catch (OperationCanceledException) when (stopCancellation.IsCancellationRequested)
         {
-            TransitionToIdle();
-            throw;
+            // Stop and emergency stop are successful terminal paths, not playback failures.
+        }
+        catch (Exception exception)
+        {
+            playbackFailure = exception;
+        }
+
+        TransitionToStoppingForFinalization();
+        var cleanup = ShouldReleasePressedInputs()
+            ? pressedInputs.ReleaseAll(inputInjector)
+            : pressedInputs.Clear();
+        var failures = CollectFailures(playbackFailure, cleanup.Failures);
+        PlaybackResult? result = null;
+
+        try
+        {
+            result = CreateResult(cleanup.ReleasedInputCount);
+        }
+        catch (Exception exception)
+        {
+            failures.Add(exception);
         }
         finally
         {
+            TransitionToIdle();
+            stopCancellation.Dispose();
             completionCallback(this);
         }
+
+        ThrowIfFailed(failures);
+        return result ?? throw new InvalidOperationException("Playback completed without producing a result.");
     }
 
     private async Task InjectWhenDueAsync(InputEvent inputEvent, long targetElapsedUs)
@@ -189,6 +236,7 @@ public sealed class PlaybackSession
 
             lock (stateSync)
             {
+                stopCancellation.Token.ThrowIfCancellationRequested();
                 if (state == PlaybackState.Paused ||
                     GetActiveElapsedLocked(scheduler.GetTimestampMicroseconds()) < targetElapsedUs)
                 {
@@ -196,13 +244,14 @@ public sealed class PlaybackSession
                 }
 
                 inputInjector.Inject(inputEvent);
+                pressedInputs.Track(inputEvent);
                 currentEventIndex++;
                 return;
             }
         }
     }
 
-    private async Task<PlaybackResult> CompleteWhenDueAsync()
+    private async Task WaitForCompletionDueAsync()
     {
         while (true)
         {
@@ -210,6 +259,7 @@ public sealed class PlaybackSession
 
             lock (stateSync)
             {
+                stopCancellation.Token.ThrowIfCancellationRequested();
                 var completionTimestampUs = scheduler.GetTimestampMicroseconds();
                 if (state == PlaybackState.Paused ||
                     GetActiveElapsedLocked(completionTimestampUs) < scaledDurationUs)
@@ -217,14 +267,7 @@ public sealed class PlaybackSession
                     continue;
                 }
 
-                var result = new PlaybackResult(
-                    currentEventIndex,
-                    scaledDurationUs,
-                    GetSafeElapsed(completionTimestampUs, playbackStartTimestampUs),
-                    playbackSpeed,
-                    totalPausedDurationUs);
-                state = PlaybackState.Idle;
-                return result;
+                return;
             }
         }
     }
@@ -233,11 +276,13 @@ public sealed class PlaybackSession
     {
         while (true)
         {
+            stopCancellation.Token.ThrowIfCancellationRequested();
             Task? resumeTask;
             long schedulerTargetUs;
 
             lock (stateSync)
             {
+                stopCancellation.Token.ThrowIfCancellationRequested();
                 if (state == PlaybackState.Paused)
                 {
                     resumeTask = resumeSignal.Task;
@@ -252,22 +297,165 @@ public sealed class PlaybackSession
 
             if (resumeTask is not null)
             {
-                await resumeTask.ConfigureAwait(false);
+                await resumeTask.WaitAsync(stopCancellation.Token).ConfigureAwait(false);
                 continue;
             }
 
             await scheduler
-                .WaitUntilElapsedAsync(playbackStartTimestampUs, schedulerTargetUs)
+                .WaitUntilElapsedAsync(
+                    playbackStartTimestampUs,
+                    schedulerTargetUs,
+                    stopCancellation.Token)
                 .ConfigureAwait(false);
 
             lock (stateSync)
             {
+                stopCancellation.Token.ThrowIfCancellationRequested();
                 if (state == PlaybackState.Playing &&
                     GetActiveElapsedLocked(scheduler.GetTimestampMicroseconds()) >= targetElapsedUs)
                 {
                     return;
                 }
             }
+        }
+    }
+
+    [SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification = "A stop must still cancel playback and run cleanup when pause accounting fails.")]
+    private Task<PlaybackResult> RequestStop(PlaybackCompletionReason completionReason)
+    {
+        Task<PlaybackResult> completionTask;
+        var shouldSignalCancellation = false;
+
+        lock (stateSync)
+        {
+            if (state == PlaybackState.Idle)
+            {
+                throw new InvalidOperationException("A completed playback session cannot be stopped.");
+            }
+
+            completionTask = completion ??
+                throw new InvalidOperationException("The playback session has not started.");
+
+            if (state == PlaybackState.Stopping)
+            {
+                if (stopRequested && completionReason == PlaybackCompletionReason.EmergencyStopped)
+                {
+                    requestedCompletionReason = completionReason;
+                }
+
+                return completionTask;
+            }
+
+            stopRequested = true;
+            requestedCompletionReason = completionReason;
+
+            if (state == PlaybackState.Paused)
+            {
+                try
+                {
+                    totalPausedDurationUs = AddSaturating(
+                        totalPausedDurationUs,
+                        GetSafeElapsed(scheduler.GetTimestampMicroseconds(), pauseStartedTimestampUs));
+                    pauseStartedTimestampUs = 0;
+                }
+                catch (Exception exception)
+                {
+                    controlFailures.Add(exception);
+                }
+            }
+
+            state = PlaybackState.Stopping;
+            resumeSignal.TrySetResult();
+            shouldSignalCancellation = true;
+        }
+
+        if (shouldSignalCancellation)
+        {
+            SignalStopCancellation();
+        }
+
+        return completionTask;
+    }
+
+    [SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification = "Cancellation callback failures must not prevent playback cleanup.")]
+    private void SignalStopCancellation()
+    {
+        try
+        {
+            stopCancellation.Cancel();
+        }
+        catch (Exception exception)
+        {
+            lock (stateSync)
+            {
+                controlFailures.Add(exception);
+            }
+        }
+    }
+
+    private PlaybackResult CreateResult(int releasedInputCount)
+    {
+        lock (stateSync)
+        {
+            return new PlaybackResult(
+                currentEventIndex,
+                scaledDurationUs,
+                GetSafeElapsed(scheduler.GetTimestampMicroseconds(), playbackStartTimestampUs),
+                playbackSpeed,
+                totalPausedDurationUs,
+                requestedCompletionReason,
+                releasedInputCount);
+        }
+    }
+
+    private List<Exception> CollectFailures(
+        Exception? playbackFailure,
+        IReadOnlyCollection<Exception> cleanupFailures)
+    {
+        List<Exception> failures = [];
+        if (playbackFailure is not null)
+        {
+            failures.Add(playbackFailure);
+        }
+
+        failures.AddRange(cleanupFailures);
+        lock (stateSync)
+        {
+            failures.AddRange(controlFailures);
+        }
+
+        return failures;
+    }
+
+    private void TransitionToStoppingForFinalization()
+    {
+        lock (stateSync)
+        {
+            state = PlaybackState.Stopping;
+            resumeSignal.TrySetResult();
+        }
+    }
+
+    private bool ShouldReleasePressedInputs()
+    {
+        lock (stateSync)
+        {
+            return stopRequested;
+        }
+    }
+
+    private void TransitionToIdle()
+    {
+        lock (stateSync)
+        {
+            state = PlaybackState.Idle;
+            resumeSignal.TrySetResult();
         }
     }
 
@@ -305,15 +493,6 @@ public sealed class PlaybackSession
         return AddSaturating(
             totalPausedDurationUs,
             GetSafeElapsed(currentTimestampUs, pauseStartedTimestampUs));
-    }
-
-    private void TransitionToIdle()
-    {
-        lock (stateSync)
-        {
-            state = PlaybackState.Idle;
-            resumeSignal.TrySetResult();
-        }
     }
 
     private static long[] ScaleTimeline(Macro macro, double speed)
@@ -360,10 +539,31 @@ public sealed class PlaybackSession
         return sum >= long.MaxValue ? long.MaxValue : (long)sum;
     }
 
+    [DoesNotReturn]
+    private static void ThrowFailure(Exception failure)
+    {
+        ExceptionDispatchInfo.Capture(failure).Throw();
+        throw new InvalidOperationException("Unreachable code.");
+    }
+
+    private static void ThrowIfFailed(List<Exception> failures)
+    {
+        if (failures.Count == 1)
+        {
+            ThrowFailure(failures.First());
+        }
+
+        if (failures.Count > 1)
+        {
+            throw new AggregateException("Playback and input cleanup encountered multiple failures.", failures);
+        }
+    }
+
     private static TaskCompletionSource CreateResumeSignal()
     {
         var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         signal.SetResult();
         return signal;
     }
+
 }

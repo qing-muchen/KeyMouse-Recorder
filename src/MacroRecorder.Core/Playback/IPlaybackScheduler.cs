@@ -8,5 +8,11 @@ public interface IPlaybackScheduler
 {
     long GetTimestampMicroseconds();
 
-    Task WaitUntilElapsedAsync(long playbackStartTimestampUs, long targetElapsedUs);
+    Task WaitUntilElapsedAsync(long playbackStartTimestampUs, long targetElapsedUs) =>
+        WaitUntilElapsedAsync(playbackStartTimestampUs, targetElapsedUs, CancellationToken.None);
+
+    Task WaitUntilElapsedAsync(
+        long playbackStartTimestampUs,
+        long targetElapsedUs,
+        CancellationToken cancellationToken);
 }

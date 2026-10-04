@@ -746,6 +746,12 @@ public sealed class PlaybackEngineTests
             return Task.CompletedTask;
         }
 
+        public virtual Task WaitUntilElapsedAsync(
+            long playbackStartTimestampUs,
+            long targetElapsedUs,
+            CancellationToken cancellationToken) =>
+            WaitUntilElapsedAsync(playbackStartTimestampUs, targetElapsedUs).WaitAsync(cancellationToken);
+
         public long GetCurrentElapsed(long playbackStartTimestampUs) =>
             GetElapsed(CurrentTimestampUs, playbackStartTimestampUs);
 

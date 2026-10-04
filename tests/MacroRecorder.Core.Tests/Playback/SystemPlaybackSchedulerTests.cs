@@ -40,4 +40,18 @@ public sealed class SystemPlaybackSchedulerTests
 
         Assert.True(scheduler.GetTimestampMicroseconds() - start >= 20_000);
     }
+
+    [Fact]
+    public async Task CancellationInterruptsLongWait()
+    {
+        var scheduler = new SystemPlaybackScheduler();
+        using var cancellation = new CancellationTokenSource();
+        var start = scheduler.GetTimestampMicroseconds();
+        var wait = scheduler.WaitUntilElapsedAsync(start, 60_000_000, cancellation.Token);
+
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => wait.WaitAsync(TimeSpan.FromSeconds(2)));
+    }
 }

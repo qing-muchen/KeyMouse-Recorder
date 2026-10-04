@@ -2,7 +2,7 @@
 
 Windows 10 / Windows 11 x64 本地键盘鼠标宏工具，使用 C#、.NET 10 和 WPF。
 
-**当前已完成 Phase 0–12，包括领域模型、统一键鼠录制、安全 JSON 持久化、语义校验、本地 Macro Library、Windows SendInput、运行时速度控制以及暂停/恢复。**
+**当前已完成 Phase 0–13，包括领域模型、统一键鼠录制、安全 JSON 持久化、语义校验、本地 Macro Library、Windows SendInput、运行时速度控制、暂停/恢复、停止与紧急停止。**
 每个 Phase 独立实现、测试、检查和提交，报告后等待用户确认；不得自动进入下一阶段。
 
 ## 开发环境
@@ -50,6 +50,7 @@ docs/
   phase-10-report.md            基础回放、绝对时间调度、尾部时长及重复执行记录
   phase-11-report.md            运行时速度、时间线缩放、溢出保护及真实速度观察记录
   phase-12-report.md            PlaybackSession、暂停门、时间线冻结及真实恢复顺序记录
+  phase-13-report.md            Stop/Emergency Stop、可取消等待、按下状态恢复及真实安全验证记录
 ```
 
 依赖方向：`App → Core + Infrastructure`，`Infrastructure → Core`。
@@ -286,7 +287,24 @@ Recorder 活跃时的 2x Playback 注入 2 个事件，RecordingResult 为 0；�
 真实验证确认暂停期间没有 A Up、左键 Click 或 Wheel；恢复后分别执行，混合顺序为 Move → A-Down → A-Up → Wheel。
 Recorder 活跃期间执行带 Pause/Resume 的 2x Playback，注入 2 个事件而 RecordingResult 为 0；临时验证器和输出已清理。
 
-当前尚无 Stop、Emergency Stop、按键/鼠标状态 cleanup、Loop/Repeat 或 WPF Playback UI。
+Stop、Emergency Stop 和按键/鼠标状态 cleanup 已在 Phase 13 实现；当前尚无 Loop/Repeat 或 WPF Playback UI。
 详细报告见 `docs/phase-12-report.md`。
 
-下一阶段仅建议 **Phase 13 — Stop / Emergency Stop**；收到明确确认后再执行。
+## Phase 13 Stop / Emergency Stop
+
+- `PlaybackSession.StopAsync()` 从 Playing 或 Paused 进入 Stopping，取消当前 Scheduler wait，阻止后续 Macro 事件，并等待输入 cleanup 完成。
+- `EmergencyStopAsync()` 使用相同安全终止管线，但以更高优先级把结果标记为 EmergencyStopped；可升级尚未完成的普通 Stop。
+- `IPlaybackScheduler` 的 CancellationToken overload 使生产 Stopwatch Scheduler 的 Task.Delay 可立即取消；没有使用 Thread.Abort、Thread.Suspend 或 Thread.Sleep。
+- Session 只跟踪成功注入且尚未释放的键和鼠标按钮；重复 KeyDown 不重复登记，正常 KeyUp/ButtonUp 会移除状态。
+- Stop cleanup 以按下顺序的逆序合成 KeyUp / MouseButtonUp；鼠标释放使用最近一次成功注入的鼠标坐标。
+- cleanup 对所有 held inputs 执行 best effort；一个失败传播原异常，多个失败使用 AggregateException，Session 与 Engine 均恢复 Idle。
+- `PlaybackResult` 增加 CompletionReason 和 ReleasedInputCount；旧构造器保持 Completed / 0 的兼容默认值。
+- 正常播放路径仍只注入 Macro 中的事件；Stop cleanup 是运行时安全动作，不修改 Macro、Events、timestamp 或 JSON schema。
+
+全量测试 573 项通过（Phase 13 新增 21 项），0 failed / 0 skipped；Release Build 为 0 warnings / 0 errors。
+真实安全窗口验证确认普通 Stop 生成 A Up 与 Left Up；混合 Emergency Stop 按 Left Up → A Up 逆序释放；包含 cleanup 的整段 injected 输入被 Recorder 全部过滤，RecordingResult 为 0。
+
+当前尚无 Loop/Repeat/Queue、Recording/Playback Coordinator 或正式 WPF Playback 控件。
+详细报告见 `docs/phase-13-report.md`。
+
+下一阶段仅建议 **Phase 14 — Recording / Playback Isolation**；收到明确确认后再执行。

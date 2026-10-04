@@ -397,6 +397,12 @@ public sealed class PlaybackSessionTests
             }
         }
 
+        public Task WaitUntilElapsedAsync(
+            long playbackStartTimestampUs,
+            long targetElapsedUs,
+            CancellationToken cancellationToken) =>
+            WaitUntilElapsedAsync(playbackStartTimestampUs, targetElapsedUs).WaitAsync(cancellationToken);
+
         public void AdvanceBy(long elapsedUs)
         {
             ArgumentOutOfRangeException.ThrowIfNegative(elapsedUs);
